@@ -1,0 +1,26 @@
+{
+  "generated": "2026-04-09T19:04:27.550623",
+  "best_model": "XGBoost",
+  "models": {
+    "XGBoost": {
+      "r2": -0.0045,
+      "rmse": 19.98,
+      "mae": 16.43
+    },
+    "RandomForest": {
+      "r2": -0.1261,
+      "rmse": 21.15,
+      "mae": 17.56
+    },
+    "LightGBM": {
+      "r2": -0.0185,
+      "rmse": 20.12,
+      "mae": 16.54
+    }
+  },
+  "training_samples": 200,
+  "test_samples": 50,
+  "features_count": 28,
+  "target": "PM2.5 (\u00b5g/m\u00b3)",
+  "cities_covered": 25
+}

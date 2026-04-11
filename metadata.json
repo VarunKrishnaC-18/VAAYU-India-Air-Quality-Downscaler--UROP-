@@ -1,0 +1,7 @@
+{
+  "name": "Remix: VAAYU: India Air Quality Downscaler",
+  "description": "AI/ML platform for generating high-resolution air quality maps from satellite data, focusing on the Indian subcontinent.",
+  "requestFramePermissions": [
+    "geolocation"
+  ]
+}
