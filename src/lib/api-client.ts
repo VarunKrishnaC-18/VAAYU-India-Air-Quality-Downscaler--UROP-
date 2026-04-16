@@ -2,7 +2,7 @@ import axios from 'axios';
 
 const API_BASE = '/api';
 
-async function fetchStaticJson(path: string) {
+export async function fetchStaticJson(path: string) {
     try {
         const res = await fetch(path, {cache: 'no-store'});
         if (!res.ok) {

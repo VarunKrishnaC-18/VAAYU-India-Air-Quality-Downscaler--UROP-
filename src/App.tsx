@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { 
   LayoutDashboard, 
   Map as MapIcon, 
@@ -57,6 +57,8 @@ import {
   getChatResponse, 
   POLLUTANTS
 } from './lib/aq-service';
+import { PaperVisualizations } from './components/PaperVisualizations';
+import SpatialLeafletMap from './components/SpatialLeafletMap';
 import ReactMarkdown from 'react-markdown';
 import {
   format,
@@ -91,6 +93,8 @@ import {
   BarChart,
   Bar
 } from 'recharts';
+import { geoMercator, geoPath } from 'd3';
+import { feature } from 'topojson-client';
 
 // --- Types ---
 
@@ -698,6 +702,7 @@ const Sidebar = ({ activeTab, setActiveTab, startVerification, setIsChatOpen }: 
     { id: 'map', icon: MapIcon, label: 'Interactive Map' },
     { id: 'literature', icon: BarChart3, label: 'Literature Review' },
     { id: 'methodology', icon: Database, label: 'Data & Methodology' },
+    { id: 'research', icon: Cpu, label: 'Paper Visualizations' },
   ];
 
   const journeyItems = [
@@ -1231,55 +1236,128 @@ const MapControls = () => {
   );
 };
 
-const IndiaMapVisualization = ({ resolution, data, onCitySelect }: { resolution: 'coarse' | 'fine'; data: OpenAQResult[]; onCitySelect: (city: string) => void }) => {
-  const [filter, setFilter] = useState<'all' | 'healthy' | 'moderate' | 'severe'>('all');
+type MapFilter = 'all' | 'healthy' | 'moderate' | 'severe';
+
+const matchesMapFilter = (pmValue: number, filter: MapFilter) => {
+  if (filter === 'all') return true;
+  if (filter === 'healthy') return pmValue <= 50;
+  if (filter === 'moderate') return pmValue > 50 && pmValue <= 150;
+  if (filter === 'severe') return pmValue > 150;
+  return true;
+};
+
+const IndiaMapVisualization = ({ resolution, data, filter, onFilterChange, onCitySelect }: { resolution: 'coarse' | 'fine'; data: OpenAQResult[]; filter: MapFilter; onFilterChange: (filter: MapFilter) => void; onCitySelect: (city: string) => void }) => {
   const [hoveredCity, setHoveredCity] = useState<OpenAQResult | null>(null);
-  
-  // Simple projection for India (approximate)
-  // Lat: 8 to 37, Lng: 68 to 97
-  const project = (lat: number, lng: number) => {
-    const x = ((lng - 68) / (97 - 68)) * 100;
-    const y = 120 - ((lat - 8) / (37 - 8)) * 120;
-    return { x, y };
+  const [indiaTopology, setIndiaTopology] = useState<any | null>(null);
+  const [boundaryError, setBoundaryError] = useState<string | null>(null);
+  const mapWidth = 1000;
+  const mapHeight = 1200;
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const loadBoundary = async () => {
+      try {
+        const response = await fetch('/vaayu_ml/india-countries-110m.json', { cache: 'no-store' });
+        if (!response.ok) throw new Error(`Boundary fetch failed: ${response.status}`);
+        const topology = await response.json();
+        if (isMounted) {
+          setIndiaTopology(topology);
+        }
+      } catch (error) {
+        console.error('Failed to load India boundary topology:', error);
+        if (isMounted) {
+          setBoundaryError('India boundary unavailable');
+        }
+      }
+    };
+
+    loadBoundary();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  const indiaBoundary = useMemo(() => {
+    if (!indiaTopology?.objects?.countries) return null;
+    try {
+      const countries = feature(indiaTopology as any, indiaTopology.objects.countries) as any;
+      return countries.features.find((entry: any) => Number(entry.id) === 356) || null;
+    } catch (error) {
+      console.error('Failed to build India boundary feature:', error);
+      return null;
+    }
+  }, [indiaTopology]);
+
+  const projection = useMemo(() => {
+    if (!indiaBoundary) return null;
+    try {
+      return geoMercator().fitSize([mapWidth, mapHeight], indiaBoundary);
+    } catch (error) {
+      console.error('Failed to build projection:', error);
+      return null;
+    }
+  }, [indiaBoundary]);
+
+  const pathGenerator = useMemo(() => {
+    if (!projection) return null;
+    try {
+      return geoPath(projection);
+    } catch (error) {
+      console.error('Failed to create map path generator:', error);
+      return null;
+    }
+  }, [projection]);
+
+  const filteredData = data.filter(city => matchesMapFilter(city.measurements[0].value, filter));
+
+  const projectedPoints = filteredData
+    .map((city, index) => {
+      if (!projection) return null;
+      const point = projection([city.coordinates.longitude, city.coordinates.latitude]);
+      if (!point) return null;
+      return {
+        city,
+        index,
+        x: point[0],
+        y: point[1],
+        pmValue: Number(city.measurements[0].value),
+      };
+    })
+    .filter((entry): entry is { city: OpenAQResult; index: number; x: number; y: number; pmValue: number } => entry !== null);
+
+  const mapStats = useMemo(() => {
+    if (projectedPoints.length === 0) {
+      return null;
+    }
+    const values = projectedPoints.map((entry) => entry.pmValue);
+    return {
+      min: Math.min(...values),
+      max: Math.max(...values),
+      avg: values.reduce((sum, value) => sum + value, 0) / values.length,
+    };
+  }, [projectedPoints]);
+
+  const getPointRadius = (pmValue: number) => {
+    if (resolution === 'coarse') return pmValue > 150 ? 12 : pmValue > 100 ? 10 : pmValue > 50 ? 8 : 6;
+    return pmValue > 150 ? 10 : pmValue > 100 ? 8 : pmValue > 50 ? 7 : 5;
   };
 
-  const filteredData = data.filter(city => {
-    const pmValue = city.measurements[0].value;
-    if (filter === 'all') return true;
-    if (filter === 'healthy') return pmValue <= 50;
-    if (filter === 'moderate') return pmValue > 50 && pmValue <= 150;
-    if (filter === 'severe') return pmValue > 150;
-    return true;
-  });
+  const getPointOpacity = (pmValue: number) => {
+    if (pmValue > 150) return 0.95;
+    if (pmValue > 100) return 0.9;
+    if (pmValue > 50) return 0.85;
+    return 0.8;
+  };
 
   return (
     <div className="relative w-full aspect-[4/5] bg-[#020617] rounded-[4rem] overflow-hidden border border-white/5 shadow-[0_0_100px_rgba(37,99,235,0.1)] group/map perspective-1000">
-      <div className="absolute top-10 left-10 z-50 flex flex-col gap-3">
-        <div className="bg-white/5 backdrop-blur-xl border border-white/10 p-4 rounded-3xl space-y-3">
-          <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">Filter by AQI</p>
-          <div className="flex flex-col gap-2">
-            {[
-              { id: 'all', label: 'All Stations', color: 'bg-slate-400' },
-              { id: 'healthy', label: 'Healthy (0-50)', color: 'bg-emerald-500' },
-              { id: 'moderate', label: 'Moderate (51-150)', color: 'bg-orange-500' },
-              { id: 'severe', label: 'Severe (151+)', color: 'bg-red-500' }
-            ].map((cat) => (
-              <button 
-                key={cat.id}
-                onClick={() => setFilter(cat.id as any)}
-                className={cn(
-                  "flex items-center gap-3 px-3 py-2 rounded-xl transition-all text-[10px] font-bold uppercase tracking-wider",
-                  filter === cat.id ? "bg-white/10 text-white" : "text-slate-400 hover:text-white"
-                )}
-              >
-                <div className={cn("w-2 h-2 rounded-full", cat.color)} />
-                {cat.label}
-              </button>
-            ))}
-          </div>
+      {boundaryError && (
+        <div className="absolute top-4 left-4 z-50 rounded-2xl border border-amber-400/20 bg-amber-500/10 px-4 py-2 text-[10px] font-black uppercase tracking-widest text-amber-200">
+          Falling back to simplified spatial view
         </div>
-      </div>
-
+      )}
       <TransformWrapper
         initialScale={1}
         initialPositionX={0}
@@ -1316,64 +1394,80 @@ const IndiaMapVisualization = ({ resolution, data, onCitySelect }: { resolution:
             </div>
             
             <motion.svg 
-              viewBox="0 0 100 120" 
+              viewBox={`0 0 ${mapWidth} ${mapHeight}`} 
               className="w-full h-full drop-shadow-[0_20px_100px_rgba(0,0,0,0.8)]"
               initial={{ rotateX: 15, rotateY: -10 }}
               whileHover={{ rotateX: 0, rotateY: 0 }}
               transition={{ duration: 1.2, ease: "easeOut" }}
             >
-              {/* Simplified India Path */}
-              <path 
-                d="M32,10 L45,8 L55,15 L65,28 L85,58 L82,78 L75,98 L65,118 L50,121 L35,115 L25,108 L15,88 L10,68 L15,48 L22,28 L28,13 Z" 
-                fill={resolution === 'fine' ? '#0f172a' : '#020617'} 
-                stroke={resolution === 'fine' ? '#3b82f6' : '#1e293b'} 
-                strokeWidth="0.5"
-                className="transition-colors duration-1000"
-              />
+              {pathGenerator && indiaBoundary ? (
+                <>
+                  <path 
+                    d={pathGenerator(indiaBoundary) || undefined} 
+                    fill="rgba(15, 23, 42, 0.95)" 
+                    stroke="rgba(59, 130, 246, 0.9)" 
+                    strokeWidth="4"
+                    className="transition-colors duration-1000"
+                  />
+                  <path
+                    d={pathGenerator(indiaBoundary) || undefined}
+                    fill="none"
+                    stroke="rgba(255,255,255,0.12)"
+                    strokeWidth="1.2"
+                  />
+                </>
+              ) : (
+                <path
+                  d="M240 160 L680 140 L800 280 L810 500 L710 760 L550 980 L380 1020 L260 900 L200 700 L170 500 L190 300 Z"
+                  fill="rgba(15, 23, 42, 0.95)"
+                  stroke="rgba(59, 130, 246, 0.9)"
+                  strokeWidth="4"
+                />
+              )}
               
-              {filteredData.length === 0 && (
+              {projectedPoints.length === 0 && (
                 <g>
-                  <text x="50" y="60" textAnchor="middle" fill="#64748b" fontSize="4" className="font-black uppercase tracking-widest">
-                    No Stations Found
+                  <text x="50" y="58" textAnchor="middle" fill="#64748b" fontSize="4" className="font-black uppercase tracking-widest">
+                    No stations in this AQI band
                   </text>
-                  <text x="50" y="66" textAnchor="middle" fill="#3b82f6" fontSize="3" className="font-bold cursor-pointer underline" onClick={() => onCitySelect('')}>
-                    Clear Search
+                  <text x="50" y="65" textAnchor="middle" fill="#3b82f6" fontSize="3" className="font-bold cursor-pointer underline" onClick={() => onFilterChange('all')}>
+                    Show all stations
                   </text>
                 </g>
               )}
               
-              {filteredData.filter(city => resolution === 'fine' || !city.location.startsWith('AI_Virtual_Station')).map((city, i) => {
-                const pmValue = city.measurements[0].value;
-                const isVirtual = city.location.startsWith('AI_Virtual_Station');
-                const { x, y } = project(city.coordinates.latitude, city.coordinates.longitude);
+              {projectedPoints.map(({ city, index, x, y, pmValue }) => {
                 const color = pmValue > 150 ? '#ef4444' : pmValue > 100 ? '#f97316' : pmValue > 50 ? '#eab308' : '#10b981';
+                const pointRadius = getPointRadius(pmValue);
 
                 return (
                   <motion.g 
-                    key={city.location + i} 
+                    key={city.location + index} 
                     className="cursor-pointer group/spot"
                     initial={{ scale: 0, opacity: 0 }}
-                    animate={{ scale: 1, opacity: isVirtual ? 0.6 : 1 }}
-                    transition={{ delay: (i % 50) * 0.01 }}
-                    onClick={() => !isVirtual && onCitySelect(city.city)}
-                    onMouseEnter={() => !isVirtual && setHoveredCity(city)}
+                    animate={{ scale: 1, opacity: getPointOpacity(pmValue) }}
+                    transition={{ delay: (index % 50) * 0.01 }}
+                    onClick={() => onCitySelect(city.city)}
+                    onMouseEnter={() => setHoveredCity(city)}
                     onMouseLeave={() => setHoveredCity(null)}
                   >
                     <circle 
                       cx={x} 
                       cy={y} 
-                      r={isVirtual ? "0.4" : (resolution === 'fine' ? "1.2" : "2.2")} 
+                      r={pointRadius} 
                       fill={color} 
-                      className="transition-all duration-500 shadow-[0_0_10px_rgba(0,0,0,0.5)] group-hover/spot:r-[2]"
+                      className="transition-all duration-500 shadow-[0_0_10px_rgba(0,0,0,0.5)]"
+                      stroke="rgba(255,255,255,0.28)"
+                      strokeWidth="0.75"
                     />
                     
-                    {!isVirtual && (
+                    {resolution === 'fine' && (
                       <circle 
                         cx={x} 
                         cy={y} 
-                        r={resolution === 'fine' ? "4" : "8"} 
+                        r={pointRadius * 2.1} 
                         fill={color} 
-                        className="animate-pulse opacity-20" 
+                        className="animate-pulse opacity-16" 
                         style={{ filter: 'blur(1px)' }}
                       />
                     )}
@@ -1424,10 +1518,11 @@ const IndiaMapVisualization = ({ resolution, data, onCitySelect }: { resolution:
       <div className="absolute top-8 right-8">
         <div className="bg-blue-600/90 backdrop-blur-md px-4 py-2 rounded-2xl shadow-2xl shadow-blue-600/20 border border-blue-400/30">
           <p className="text-[7px] font-black text-white uppercase tracking-[0.3em]">
-            {resolution === 'fine' ? 'AI SHARPENED (1KM)' : 'SATELLITE RAW (10KM)'}
+            {resolution === 'fine' ? 'AI SHARPENED (1KM)' : 'SATELLITE RAW (10KM)'} • {projectedPoints.length} POINTS
           </p>
         </div>
       </div>
+
     </div>
   );
 };
@@ -1547,10 +1642,16 @@ export default function App() {
   const [selectedDate, setSelectedDate] = useState<Date>(new Date());
   const [compactHeader, setCompactHeader] = useState(false);
   const [realtimeRefresh, setRealtimeRefresh] = useState(true);
+  const [mapFilter, setMapFilter] = useState<MapFilter>('all');
   const [apiError, setApiError] = useState('');
   const [predictForm, setPredictForm] = useState({ temp: '', humidity: '', wind_speed: '', aod: '', lat: '', lon: '' });
   const [predictionResult, setPredictionResult] = useState<number | null>(null);
   const [isPredicting, setIsPredicting] = useState(false);
+  const selectedCityRef = useRef(selectedCity);
+
+  useEffect(() => {
+    selectedCityRef.current = selectedCity;
+  }, [selectedCity]);
 
   const selectedCityData: any = apiCities.find((city: any) => city.city.toLowerCase() === selectedCity.toLowerCase()) || apiCities[0] || null;
   const selectedMapPoint = mapData[0] || null;
@@ -1560,32 +1661,120 @@ export default function App() {
   const currentPollutant = POLLUTANTS.find(p => p.id === 'pm25') || POLLUTANTS[0];
   const modelSummary = apiMetrics?.models?.[apiMetrics?.best_model] || null;
   const modelNames = apiMetrics?.models ? Object.keys(apiMetrics.models) : [];
-  const mapPointSummaries = (() => {
-    const seen = new Set<string>();
+  const mapPointSummaries = useMemo(() => {
+    const features = Array.isArray(rawMapGeoJSON?.features) ? rawMapGeoJSON.features : [];
+    const selectedLat = Number(selectedCityData?.lat);
+    const selectedLon = Number(selectedCityData?.lon);
+    const hasCityFocus = Number.isFinite(selectedLat) && Number.isFinite(selectedLon);
+    const cityLatPad = mapResolution === 'fine' ? 2.2 : 3.2;
+    const cityLonPad = mapResolution === 'fine' ? 2.2 : 3.2;
+
+    const getFeatureCoordinates = (geometry: any) => {
+      if (!geometry) return null;
+
+      if (geometry.type === 'Point' && Array.isArray(geometry.coordinates)) {
+        return { lon: Number(geometry.coordinates[0]), lat: Number(geometry.coordinates[1]) };
+      }
+
+      if (geometry.type === 'Polygon' && Array.isArray(geometry.coordinates?.[0])) {
+        const ring = geometry.coordinates[0];
+        if (!ring.length) return null;
+        const [sumLon, sumLat] = ring.reduce(
+          (acc: [number, number], coord: [number, number]) => [acc[0] + Number(coord[0]), acc[1] + Number(coord[1])],
+          [0, 0]
+        );
+        return { lon: sumLon / ring.length, lat: sumLat / ring.length };
+      }
+
+      if (geometry.type === 'MultiPolygon' && Array.isArray(geometry.coordinates?.[0]?.[0])) {
+        const ring = geometry.coordinates[0][0];
+        if (!ring.length) return null;
+        const [sumLon, sumLat] = ring.reduce(
+          (acc: [number, number], coord: [number, number]) => [acc[0] + Number(coord[0]), acc[1] + Number(coord[1])],
+          [0, 0]
+        );
+        return { lon: sumLon / ring.length, lat: sumLat / ring.length };
+      }
+
+      return null;
+    };
+
+    const summaries = features
+      .map((feature: any, index: number) => {
+        const coords = getFeatureCoordinates(feature?.geometry);
+        const pm25 = Number(feature?.properties?.pm25 ?? 0);
+        if (!coords || !Number.isFinite(pm25)) return null;
+
+        // Keep side summaries geographically meaningful for India map view.
+        if (coords.lat < 6 || coords.lat > 38 || coords.lon < 68 || coords.lon > 98) return null;
+        if (hasCityFocus) {
+          const inCityWindow =
+            Math.abs(coords.lat - selectedLat) <= cityLatPad &&
+            Math.abs(coords.lon - selectedLon) <= cityLonPad;
+          if (!inCityWindow) return null;
+        }
+
+        const category = pm25 > 150 ? 'Severe' : pm25 > 50 ? 'Moderate' : 'Healthy';
+
+        return {
+          key: `${coords.lat.toFixed(2)}-${coords.lon.toFixed(2)}-${pm25.toFixed(1)}`,
+          index,
+          lat: coords.lat,
+          lon: coords.lon,
+          pm25,
+          category,
+        };
+      })
+      .filter((point): point is { key: string; index: number; lat: number; lon: number; pm25: number; category: string } => point !== null)
+      .sort((a, b) => b.pm25 - a.pm25)
+      .slice(0, 8);
+
+    if (summaries.length > 0) return summaries;
+
+    const fallbackSeen = new Set<string>();
     return mapData
       .map((point, index) => {
         const pm25 = Number(point.measurements[0]?.value ?? 0);
         const lat = Number(point.coordinates.latitude);
         const lon = Number(point.coordinates.longitude);
+
+        if (lat < 6 || lat > 38 || lon < 68 || lon > 98) return null;
+        if (hasCityFocus) {
+          const inCityWindow =
+            Math.abs(lat - selectedLat) <= cityLatPad &&
+            Math.abs(lon - selectedLon) <= cityLonPad;
+          if (!inCityWindow) return null;
+        }
+
         const category = pm25 > 150 ? 'Severe' : pm25 > 50 ? 'Moderate' : 'Healthy';
         return {
-          ...point,
+          key: `${lat.toFixed(2)}-${lon.toFixed(2)}-${pm25.toFixed(1)}`,
           index,
-          pm25,
           lat,
           lon,
+          pm25,
           category,
-          key: `${lat.toFixed(2)}-${lon.toFixed(2)}-${pm25.toFixed(1)}`,
         };
       })
-      .filter(point => {
-        if (seen.has(point.key)) return false;
-        seen.add(point.key);
+      .filter((point): point is { key: string; index: number; lat: number; lon: number; pm25: number; category: string } => point !== null)
+      .filter((point) => {
+        if (fallbackSeen.has(point.key)) return false;
+        fallbackSeen.add(point.key);
         return true;
       })
       .sort((a, b) => b.pm25 - a.pm25)
       .slice(0, 8);
-  })();
+  }, [rawMapGeoJSON, mapData, selectedCityData?.lat, selectedCityData?.lon, mapResolution]);
+  const filteredMapPointSummaries = mapPointSummaries.filter((point) => matchesMapFilter(point.pm25, mapFilter));
+  const mapStats = useMemo(() => {
+    if (filteredMapPointSummaries.length === 0) return null;
+    const values = filteredMapPointSummaries.map((point) => Number(point.pm25));
+    return {
+      min: Math.min(...values),
+      avg: values.reduce((sum, value) => sum + value, 0) / values.length,
+      max: Math.max(...values),
+    };
+  }, [filteredMapPointSummaries]);
 
   const suggestions = [
     "Should I wear a mask? 😷",
@@ -1630,7 +1819,7 @@ export default function App() {
 
       let nextSelected = '';
       if (nextRawCities.length > 0) {
-        nextSelected = nextRawCities.find((city: any) => city.city.toLowerCase() === selectedCity.toLowerCase())?.city || nextRawCities[0].city;
+        nextSelected = nextRawCities.find((city: any) => city.city.toLowerCase() === selectedCityRef.current.toLowerCase())?.city || nextRawCities[0].city;
         setSelectedCity(nextSelected);
       } else {
         setSelectedCity('');
@@ -1662,7 +1851,7 @@ export default function App() {
     } finally {
       setLoading(false);
     }
-  }, [selectedCity, selectedDate]);
+  }, [selectedDate]);
 
   useEffect(() => {
     loadData();
@@ -2025,7 +2214,7 @@ export default function App() {
                 <div className="flex items-center justify-between mb-6">
                   <div>
                     <h3 className="text-xl font-black text-white">Spatial Map</h3>
-                    <p className="text-sm text-slate-500">Live GeoJSON points from the backend map endpoint</p>
+                    <p className="text-sm text-slate-500">Real GeoJSON PM2.5 grid rendered from model output</p>
                   </div>
                   <div className="flex bg-white/5 p-1.5 rounded-2xl border border-white/10">
                     <button 
@@ -2042,14 +2231,100 @@ export default function App() {
                     </button>
                   </div>
                 </div>
-                <IndiaMapVisualization resolution={mapResolution} data={mapData.length > 0 ? (mapResolution === 'coarse' ? mapPointSummaries.slice(0, Math.max(1, Math.ceil(mapPointSummaries.length / 2))) : mapData) : aqData} onCitySelect={setSelectedCity} />
+                <SpatialLeafletMap
+                  geoJsonData={rawMapGeoJSON}
+                  filter={mapFilter}
+                  resolution={mapResolution}
+                  selectedCityName={selectedCityData?.city}
+                  selectedCityCenter={selectedCityData ? { lat: Number(selectedCityData.lat), lon: Number(selectedCityData.lon) } : null}
+                />
+              </div>
+
+              <div className="bg-blue-600 p-8 rounded-[2.5rem] text-white shadow-xl shadow-blue-600/20 relative overflow-hidden">
+                <div className="absolute -right-10 -bottom-10 opacity-20">
+                  <AlertTriangle size={150} />
+                </div>
+                <div className="flex items-center gap-3 mb-4 relative z-10">
+                  <AlertTriangle className="w-6 h-6 text-yellow-400" />
+                  <h3 className="text-lg font-black">Health Advisory</h3>
+                </div>
+                <p className="text-sm text-blue-100 leading-relaxed relative z-10 font-medium">
+                  {selectedCityData?.health_advisory || 'Backend advisory unavailable for the selected city.'}
+                </p>
               </div>
             </div>
             <div className="space-y-6">
+              <div className="bg-white/5 backdrop-blur-xl p-6 rounded-[2.5rem] border border-white/10 shadow-2xl">
+                <div className="flex items-center justify-between gap-4 flex-wrap">
+                  <div>
+                    <h3 className="text-lg font-black text-white">AQI Filter</h3>
+                    <p className="text-xs text-slate-500">Filter the spatial map and point list with the same category control.</p>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {[
+                      { id: 'all', label: 'All Stations', color: 'bg-slate-400' },
+                      { id: 'healthy', label: 'Healthy (0-50)', color: 'bg-emerald-500' },
+                      { id: 'moderate', label: 'Moderate (51-150)', color: 'bg-orange-500' },
+                      { id: 'severe', label: 'Severe (151+)', color: 'bg-red-500' }
+                    ].map((cat) => (
+                      <button
+                        key={cat.id}
+                        onClick={() => setMapFilter(cat.id as MapFilter)}
+                        className={cn(
+                          "flex items-center gap-3 px-4 py-3 rounded-2xl transition-all text-[10px] font-black uppercase tracking-wider border",
+                          mapFilter === cat.id
+                            ? "bg-blue-600 text-white border-blue-400 shadow-lg shadow-blue-600/20"
+                            : "bg-white/5 text-slate-400 border-white/10 hover:text-white hover:bg-white/10"
+                        )}
+                      >
+                        <div className={cn("w-2.5 h-2.5 rounded-full", cat.color)} />
+                        {cat.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              <div className="bg-white/5 backdrop-blur-xl p-6 rounded-[2.5rem] border border-white/10 shadow-2xl">
+                <div className="flex items-center justify-between gap-4 mb-4">
+                  <div>
+                    <h3 className="text-lg font-black text-white">PM2.5 Legend</h3>
+                    <p className="text-xs text-slate-500">The map colors represent real PM2.5 concentration bands.</p>
+                  </div>
+                </div>
+                <div className="space-y-3">
+                  {[
+                    { label: 'Healthy', range: '0-50', color: 'bg-emerald-500', text: 'Low concentration' },
+                    { label: 'Moderate', range: '51-100', color: 'bg-amber-400', text: 'Elevated concentration' },
+                    { label: 'Poor', range: '101-150', color: 'bg-orange-500', text: 'High concentration' },
+                    { label: 'Severe', range: '151+', color: 'bg-red-500', text: 'Very high concentration' },
+                  ].map((item) => (
+                    <div key={item.label} className="flex items-center justify-between rounded-2xl bg-white/5 px-4 py-3 border border-white/10">
+                      <div className="flex items-center gap-3">
+                        <span className={cn("h-3 w-3 rounded-full", item.color)} />
+                        <div>
+                          <p className="text-sm font-black text-white">{item.label}</p>
+                          <p className="text-[10px] text-slate-500">{item.range} µg/m³</p>
+                        </div>
+                      </div>
+                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">{item.text}</span>
+                    </div>
+                  ))}
+                </div>
+                {mapStats && (
+                  <div className="mt-4 grid grid-cols-3 gap-3 text-[10px] text-slate-400">
+                    <div className="rounded-2xl bg-white/5 px-3 py-3 border border-white/10"><span className="block text-slate-500 mb-1">Min</span>{mapStats.min.toFixed(1)}</div>
+                    <div className="rounded-2xl bg-white/5 px-3 py-3 border border-white/10"><span className="block text-slate-500 mb-1">Avg</span>{mapStats.avg.toFixed(1)}</div>
+                    <div className="rounded-2xl bg-white/5 px-3 py-3 border border-white/10"><span className="block text-slate-500 mb-1">Max</span>{mapStats.max.toFixed(1)}</div>
+                  </div>
+                )}
+              </div>
+
               <div className="bg-white/5 backdrop-blur-xl p-8 rounded-[2.5rem] border border-white/10 shadow-2xl">
-                <h3 className="text-xl font-black text-white mb-6">Map Points</h3>
+                <h3 className="text-xl font-black text-white mb-2">Map Points</h3>
+                <p className="text-xs text-slate-500 mb-6">Showing {filteredMapPointSummaries.length} of {mapPointSummaries.length} points in the selected AQI band</p>
                 <div className="space-y-4">
-                  {mapPointSummaries.slice(0, 5).map((area) => (
+                  {filteredMapPointSummaries.slice(0, 5).map((area) => (
                     <div key={area.key} className="flex items-center justify-between p-5 bg-white/5 rounded-3xl border border-white/5 group cursor-pointer hover:bg-blue-600/10 hover:border-blue-500/30 transition-all">
                       <div className="flex items-center gap-4">
                         <div className="w-12 h-12 bg-white/10 rounded-2xl flex items-center justify-center shadow-sm group-hover:scale-110 transition-transform">
@@ -2067,19 +2342,12 @@ export default function App() {
                       <ChevronRight className="w-5 h-5 text-slate-500 group-hover:text-blue-400 transition-colors" />
                     </div>
                   ))}
+                  {filteredMapPointSummaries.length === 0 && (
+                    <div className="p-5 rounded-3xl border border-white/5 bg-white/5 text-sm text-slate-400">
+                      No points match the current AQI filter. Switch to All Stations to view the full spatial surface.
+                    </div>
+                  )}
                 </div>
-              </div>
-              <div className="bg-blue-600 p-8 rounded-[2.5rem] text-white shadow-xl shadow-blue-600/20 relative overflow-hidden">
-                <div className="absolute -right-10 -bottom-10 opacity-20">
-                  <AlertTriangle size={150} />
-                </div>
-                <div className="flex items-center gap-3 mb-4 relative z-10">
-                  <AlertTriangle className="w-6 h-6 text-yellow-400" />
-                  <h3 className="text-lg font-black">Health Advisory</h3>
-                </div>
-                <p className="text-sm text-blue-100 leading-relaxed relative z-10 font-medium">
-                  {selectedCityData?.health_advisory || 'Backend advisory unavailable for the selected city.'}
-                </p>
               </div>
             </div>
           </div>
@@ -2172,6 +2440,8 @@ export default function App() {
         return null; // Handled by literature
       case 'methodology':
         return <Methodology startVerification={startVerification} metrics={apiMetrics} />;
+      case 'research':
+        return <PaperVisualizations />;
       default:
         return null;
     }
