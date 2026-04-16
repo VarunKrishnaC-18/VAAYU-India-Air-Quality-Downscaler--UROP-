@@ -55,10 +55,14 @@ export const PaperVisualizations: React.FC = () => {
   const [cities, setCities] = useState<CityPrediction[]>([]);
   const [spatialData, setSpatialData] = useState<SpatialPoint[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     const loadData = async () => {
       try {
+        setLoading(true);
+        setError(null);
+        
         const [metricsData, featureData, citiesData, spatialMapData] = await Promise.all([
           fetchStaticJson('/vaayu_ml/model_metrics.json'),
           fetchStaticJson('/vaayu_ml/feature_importance.json'),
@@ -66,15 +70,20 @@ export const PaperVisualizations: React.FC = () => {
           fetchStaticJson('/vaayu_ml/spatial_map.geojson'),
         ]);
 
+        if (!metricsData || !featureData || !citiesData) {
+          throw new Error('Failed to load required data files');
+        }
+
         setModelMetrics(metricsData);
-        setFeatures(featureData.filter((f: FeatureImportance) => f.importance > 0).slice(0, 15));
-        setCities(citiesData);
+        setFeatures(Array.isArray(featureData) ? featureData.filter((f: FeatureImportance) => f.importance > 0).slice(0, 15) : []);
+        setCities(Array.isArray(citiesData) ? citiesData : []);
         
-        if (spatialMapData.features) {
+        if (spatialMapData && spatialMapData.features && Array.isArray(spatialMapData.features)) {
           setSpatialData(spatialMapData.features);
         }
       } catch (error) {
         console.error('Error loading visualization data:', error);
+        setError(`Error loading data: ${error instanceof Error ? error.message : 'Unknown error'}`);
       } finally {
         setLoading(false);
       }
@@ -87,6 +96,17 @@ export const PaperVisualizations: React.FC = () => {
     return (
       <div className="flex items-center justify-center h-screen">
         <div className="text-gray-600">Loading visualizations...</div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="flex items-center justify-center h-screen">
+        <div className="bg-red-50 border border-red-200 rounded p-4">
+          <p className="text-red-800 font-semibold">Error Loading Visualizations</p>
+          <p className="text-red-600 text-sm mt-2">{error}</p>
+        </div>
       </div>
     );
   }
@@ -121,6 +141,13 @@ export const PaperVisualizations: React.FC = () => {
     predicted: city.pm25_predicted,
     actual: city.pm25_actual,
   }));
+
+  // Create diagonal line data for "perfect prediction"
+  const maxPM25 = Math.max(...predictedVsActualData.map(d => Math.max(d.actual, d.predicted)), 100);
+  const diagonalLineData = [
+    { actual: 0, predicted: 0, type: 'diagonal' },
+    { actual: maxPM25, predicted: maxPM25, type: 'diagonal' },
+  ];
 
   // Prepare data for Feature Importance
   const featureImportanceData = features.map((f) => ({
@@ -172,10 +199,10 @@ export const PaperVisualizations: React.FC = () => {
           )}
         </div>
 
-        {/* Fig 3: Model Comparison Graph */}
+        {/* Fig 1: Model Comparison Graph */}
         <div className="bg-white rounded-xl shadow-lg p-8">
           <div className="mb-6">
-            <h2 className="text-2xl font-bold text-gray-900">Figure 3: Model Performance Comparison</h2>
+            <h2 className="text-2xl font-bold text-gray-900">Figure 1: Model Performance Comparison</h2>
             <p className="text-sm text-gray-600 mt-1">
               Comparison of three machine learning models: XGBoost, Random Forest, and LightGBM on validation metrics
             </p>
@@ -214,64 +241,84 @@ export const PaperVisualizations: React.FC = () => {
           </div>
         </div>
 
-        {/* Fig 4: Predicted vs Actual Plot */}
+        {/* Fig 2: Predicted vs Actual Plot */}
         <div className="bg-white rounded-xl shadow-lg p-8">
           <div className="mb-6">
-            <h2 className="text-2xl font-bold text-gray-900">Figure 4: Predicted vs Actual PM2.5 Concentration</h2>
+            <h2 className="text-2xl font-bold text-gray-900">Figure 2: Predicted vs Actual PM2.5 Concentration</h2>
             <p className="text-sm text-gray-600 mt-1">
-              Scatter plot showing model predictions versus actual PM2.5 measurements across {cities.length} cities
+              Scatter plot showing model predictions versus actual PM2.5 measurements across {cities.length} cities. The red dashed line represents perfect prediction accuracy.
             </p>
           </div>
           <ResponsiveContainer width="100%" height={400}>
-            <ScatterChart margin={{ top: 20, right: 20, bottom: 20, left: 20 }}>
+            <ComposedChart margin={{ top: 20, right: 20, bottom: 60, left: 60 }} data={diagonalLineData}>
               <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-              <XAxis type="number" dataKey="actual" name="Actual PM2.5" />
-              <YAxis type="number" dataKey="predicted" name="Predicted PM2.5" />
+              <XAxis 
+                type="number" 
+                dataKey="actual" 
+                name="Actual PM2.5"
+                label={{ value: 'Actual PM2.5 (µg/m³)', position: 'bottom', offset: 10 }}
+                domain={[0, maxPM25]}
+              />
+              <YAxis 
+                type="number" 
+                name="Predicted PM2.5"
+                label={{ value: 'Predicted PM2.5 (µg/m³)', angle: -90, position: 'insideLeft' }}
+                domain={[0, maxPM25]}
+              />
               <Tooltip
                 contentStyle={{
                   backgroundColor: '#f9fafb',
                   border: '1px solid #e5e7eb',
                   borderRadius: '8px',
                 }}
+                cursor={{ strokeDasharray: '3 3' }}
                 formatter={(value) => formatNumericValue(value)}
+                labelFormatter={(label) => `Actual: ${formatNumericValue(label)}`}
               />
               <Legend />
+              <Line
+                dataKey="predicted"
+                type="monotone"
+                stroke="#ef4444"
+                strokeDasharray="5 5"
+                name="Perfect Prediction"
+                dot={false}
+                isAnimationActive={false}
+              />
               <Scatter
                 name="Cities"
                 data={predictedVsActualData}
                 fill="#3b82f6"
                 fillOpacity={0.6}
               />
-              <Line
-                type="monotone"
-                dataKey="actual"
-                stroke="#ef4444"
-                strokeDasharray="5 5"
-                name="Perfect Prediction"
-                dot={false}
-              />
-            </ScatterChart>
+            </ComposedChart>
           </ResponsiveContainer>
           <div className="mt-6 grid grid-cols-2 gap-4 text-sm">
             <div className="bg-blue-50 p-3 rounded">
               <p className="font-semibold text-blue-900">Mean Predicted</p>
               <p className="text-lg text-blue-600">
-                {(predictedVsActualData.reduce((sum, d) => sum + d.predicted, 0) / predictedVsActualData.length).toFixed(2)} µg/m³
+                {predictedVsActualData.length > 0 
+                  ? (predictedVsActualData.reduce((sum, d) => sum + d.predicted, 0) / predictedVsActualData.length).toFixed(2)
+                  : '0.00'
+                } µg/m³
               </p>
             </div>
             <div className="bg-green-50 p-3 rounded">
               <p className="font-semibold text-green-900">Mean Actual</p>
               <p className="text-lg text-green-600">
-                {(predictedVsActualData.reduce((sum, d) => sum + d.actual, 0) / predictedVsActualData.length).toFixed(2)} µg/m³
+                {predictedVsActualData.length > 0
+                  ? (predictedVsActualData.reduce((sum, d) => sum + d.actual, 0) / predictedVsActualData.length).toFixed(2)
+                  : '0.00'
+                } µg/m³
               </p>
             </div>
           </div>
         </div>
 
-        {/* Fig 5: Feature Importance Graph */}
+        {/* Fig 3: Feature Importance Graph */}
         <div className="bg-white rounded-xl shadow-lg p-8">
           <div className="mb-6">
-            <h2 className="text-2xl font-bold text-gray-900">Figure 5: Feature Importance Analysis</h2>
+            <h2 className="text-2xl font-bold text-gray-900">Figure 3: Feature Importance Analysis</h2>
             <p className="text-sm text-gray-600 mt-1">
               Top 15 features contributing to PM2.5 predictions (XGBoost model)
             </p>
@@ -309,10 +356,10 @@ export const PaperVisualizations: React.FC = () => {
           </div>
         </div>
 
-        {/* Fig 6: Spatial Air Quality Map */}
+        {/* Fig 4: Spatial Air Quality Map */}
         <div className="bg-white rounded-xl shadow-lg p-8">
           <div className="mb-6">
-            <h2 className="text-2xl font-bold text-gray-900">Figure 6: Spatial Air Quality Distribution</h2>
+            <h2 className="text-2xl font-bold text-gray-900">Figure 4: Spatial Air Quality Distribution</h2>
             <p className="text-sm text-gray-600 mt-1">
               Geographic distribution of PM2.5 concentrations across monitoring locations in India
             </p>
@@ -391,7 +438,7 @@ export const PaperVisualizations: React.FC = () => {
           <div className="mt-8 grid grid-cols-4 gap-4">
             <div className="bg-gradient-to-br from-blue-50 to-blue-100 p-4 rounded-lg">
               <p className="text-sm text-gray-600">Cities Covered</p>
-              <p className="text-2xl font-bold text-blue-900">{modelMetrics?.cities_covered}</p>
+              <p className="text-2xl font-bold text-blue-900">{modelMetrics?.cities_covered || 0}</p>
             </div>
             <div className="bg-gradient-to-br from-purple-50 to-purple-100 p-4 rounded-lg">
               <p className="text-sm text-gray-600">Monitoring Points</p>
@@ -400,13 +447,19 @@ export const PaperVisualizations: React.FC = () => {
             <div className="bg-gradient-to-br from-orange-50 to-orange-100 p-4 rounded-lg">
               <p className="text-sm text-gray-600">Max PM2.5</p>
               <p className="text-2xl font-bold text-orange-900">
-                {Math.max(...spatialDistributionData.map(d => d.pm25)).toFixed(1)} µg/m³
+                {spatialDistributionData.length > 0 
+                  ? Math.max(...spatialDistributionData.map(d => d.pm25)).toFixed(1)
+                  : 'N/A'
+                } µg/m³
               </p>
             </div>
             <div className="bg-gradient-to-br from-green-50 to-green-100 p-4 rounded-lg">
               <p className="text-sm text-gray-600">Min PM2.5</p>
               <p className="text-2xl font-bold text-green-900">
-                {Math.min(...spatialDistributionData.map(d => d.pm25)).toFixed(1)} µg/m³
+                {spatialDistributionData.length > 0 
+                  ? Math.min(...spatialDistributionData.map(d => d.pm25)).toFixed(1)
+                  : 'N/A'
+                } µg/m³
               </p>
             </div>
           </div>

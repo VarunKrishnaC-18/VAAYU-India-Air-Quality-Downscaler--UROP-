@@ -7,7 +7,6 @@ import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { 
   LayoutDashboard, 
   Map as MapIcon, 
-  BarChart3, 
   Info, 
   Wind, 
   AlertTriangle, 
@@ -57,7 +56,6 @@ import {
   getChatResponse, 
   POLLUTANTS
 } from './lib/aq-service';
-import { PaperVisualizations } from './components/PaperVisualizations';
 import SpatialLeafletMap from './components/SpatialLeafletMap';
 import ReactMarkdown from 'react-markdown';
 import {
@@ -700,16 +698,13 @@ const Sidebar = ({ activeTab, setActiveTab, startVerification, setIsChatOpen }: 
   const items = [
     { id: 'dashboard', icon: LayoutDashboard, label: 'Dashboard' },
     { id: 'map', icon: MapIcon, label: 'Interactive Map' },
-    { id: 'literature', icon: BarChart3, label: 'Literature Review' },
     { id: 'methodology', icon: Database, label: 'Data & Methodology' },
-    { id: 'research', icon: Cpu, label: 'Paper Visualizations' },
   ];
 
   const journeyItems = [
     { step: "01", title: "Explore Map", icon: MapIcon, color: "blue", tab: 'map' },
     { step: "02", title: "Verify Data", icon: Activity, color: "emerald", action: startVerification },
-    { step: "03", title: "AI Insights", icon: MessageSquare, color: "purple", action: () => setIsChatOpen(true) },
-    { step: "04", title: "Research", icon: BarChart3, color: "cyan", tab: 'literature' }
+    { step: "03", title: "AI Insights", icon: MessageSquare, color: "purple", action: () => setIsChatOpen(true) }
   ];
 
   return (
@@ -2440,8 +2435,6 @@ export default function App() {
         return null; // Handled by literature
       case 'methodology':
         return <Methodology startVerification={startVerification} metrics={apiMetrics} />;
-      case 'research':
-        return <PaperVisualizations />;
       default:
         return null;
     }

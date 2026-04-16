@@ -1,0 +1,114 @@
+[
+  {
+    "feature": "lat",
+    "importance": 0.06108750402927399
+  },
+  {
+    "feature": "dist_igp",
+    "importance": 0.0607013925909996
+  },
+  {
+    "feature": "aod",
+    "importance": 0.056337159126996994
+  },
+  {
+    "feature": "lon",
+    "importance": 0.05561694875359535
+  },
+  {
+    "feature": "ventilation",
+    "importance": 0.052906010299921036
+  },
+  {
+    "feature": "precipitation",
+    "importance": 0.05191081017255783
+  },
+  {
+    "feature": "radiation",
+    "importance": 0.05160843953490257
+  },
+  {
+    "feature": "aod_humidity",
+    "importance": 0.05155535787343979
+  },
+  {
+    "feature": "wind_dir",
+    "importance": 0.04992889612913132
+  },
+  {
+    "feature": "cloud_cover",
+    "importance": 0.049927521497011185
+  },
+  {
+    "feature": "temp",
+    "importance": 0.049701105803251266
+  },
+  {
+    "feature": "doy_sin",
+    "importance": 0.04886987805366516
+  },
+  {
+    "feature": "aod_clear",
+    "importance": 0.048703305423259735
+  },
+  {
+    "feature": "day_of_year",
+    "importance": 0.04867047816514969
+  },
+  {
+    "feature": "pressure",
+    "importance": 0.04751788452267647
+  },
+  {
+    "feature": "zone_code",
+    "importance": 0.04625483229756355
+  },
+  {
+    "feature": "wind_speed",
+    "importance": 0.043769367039203644
+  },
+  {
+    "feature": "aod_wind_interact",
+    "importance": 0.04349545016884804
+  },
+  {
+    "feature": "humidity",
+    "importance": 0.04247796908020973
+  },
+  {
+    "feature": "dew_depression",
+    "importance": 0.03895966708660126
+  },
+  {
+    "feature": "visibility",
+    "importance": 0.0
+  },
+  {
+    "feature": "inversion_risk",
+    "importance": 0.0
+  },
+  {
+    "feature": "rain_washout",
+    "importance": 0.0
+  },
+  {
+    "feature": "month",
+    "importance": 0.0
+  },
+  {
+    "feature": "season",
+    "importance": 0.0
+  },
+  {
+    "feature": "month_sin",
+    "importance": 0.0
+  },
+  {
+    "feature": "month_cos",
+    "importance": 0.0
+  },
+  {
+    "feature": "doy_cos",
+    "importance": 0.0
+  }
+]
